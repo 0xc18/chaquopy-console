@@ -35,7 +35,8 @@ android {
 chaquopy {
     defaultConfig {
         pip {
-            install "six"
+            install("six")
+            install("tqdm")
         }
     }
 }
