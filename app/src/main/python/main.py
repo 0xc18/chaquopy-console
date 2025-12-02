@@ -7,8 +7,9 @@ def main():
     while True:
         try:
             name = input()
-            for i in tqdm(range(10)):
+            for i in range(10):
                 sleep(1)
+                print("sleep",i, end="\r")
         except EOFError:
             break
         if not name:
