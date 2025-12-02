@@ -17,13 +17,6 @@ import androidx.lifecycle.*;
 public abstract class ConsoleActivity extends BaseActivity
 implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollChangedListener {
 
-    // Because tvOutput has freezesText enabled, letting it get too large can cause a
-    // TransactionTooLargeException. The limit isn't in the saved state itself, but in the
-    // Binder transaction which transfers it to the system server. So it doesn't happen if
-    // you're rotating the screen, but it does happen when you press Back.
-    //
-    // The exception message shows the size of the failed transaction, so I can determine from
-    // experiment that the limit is about 500 KB, and each character consumes 4 bytes.
     private final int MAX_SCROLLBACK_LEN = 100000;
 
     private EditText etInput;
@@ -35,12 +28,11 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         TOP, BOTTOM
     }
     private Scroll scrollRequest;
-    
+
     public static class ConsoleModel extends ViewModel {
-        boolean pendingNewline = false;  // Prevent empty line at bottom of screen
-        int scrollChar = 0;              // Character offset of the top visible line.
-        int scrollAdjust = 0;            // Pixels by which that line is scrolled above the top
-                                         //   (prevents movement when keyboard hidden/shown).
+        boolean pendingNewline = false;
+        int scrollChar = 0;
+        int scrollAdjust = 0;
     }
     private ConsoleModel consoleModel;
 
@@ -61,7 +53,6 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
     private void createInput() {
         etInput = findViewById(resId("id", "etInput"));
 
-        // Strip formatting from pasted text.
         etInput.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             public void onTextChanged(CharSequence s, int start, int before, int count) {}
@@ -72,14 +63,11 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
             }
         });
 
-        // At least on API level 28, if an ACTION_UP is lost during a rotation, then the app
-        // (or any other app which takes focus) will receive an endless stream of ACTION_DOWNs
-        // until the key is pressed again. So we react to ACTION_UP instead.
         etInput.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if ((actionId == EditorInfo.IME_ACTION_DONE && event == null) || // Soft keyboard
-                    (event != null && event.getAction() == KeyEvent.ACTION_UP)  // Hard keyboard
+                if ((actionId == EditorInfo.IME_ACTION_DONE && event == null) ||
+                    (event != null && event.getAction() == KeyEvent.ACTION_UP)
                 ) {
                     String text = etInput.getText().toString() + "\n";
                     etInput.setText("");
@@ -87,8 +75,6 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
                     scrollTo(Scroll.BOTTOM);
                     task.onInput(text);
                 }
-
-                // If we return false on ACTION_DOWN, we won't be given the ACTION_UP.
                 return true;
             }
         });
@@ -99,16 +85,9 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
                 if (enabled) {
                     etInput.setVisibility(View.VISIBLE);
                     etInput.setEnabled(true);
-
-                    // requestFocus alone doesn't always bring up the soft keyboard during startup
-                    // on the Nexus 4 with API level 22: probably some race condition. (After
-                    // rotation with input *already* enabled, the focus may be overridden by
-                    // onRestoreInstanceState, which will run after this observer.)
                     etInput.requestFocus();
                     imm.showSoftInput(etInput, InputMethodManager.SHOW_IMPLICIT);
                 } else {
-                    // Disable rather than hide, otherwise tvOutput gets a gray background on API
-                    // level 26, like tvCaption in the main menu when you press an arrow key.
                     etInput.setEnabled(false);
                     imm.hideSoftInputFromWindow(tvOutput.getWindowToken(), 0);
                 }
@@ -121,16 +100,10 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         svOutput.getViewTreeObserver().addOnGlobalLayoutListener(this);
 
         tvOutput = findViewById(resId("id", "tvOutput"));
-
-        // noinspection WrongConstant
         tvOutput.setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE);
-
-        // Don't start observing task.output yet: we need to restore the scroll position first so
-        // we maintain the scrolled-to-bottom state.
     }
 
     @Override protected void onRestoreInstanceState(@NonNull Bundle savedInstanceState) {
-        // Don't restore the UI state unless we have the non-UI state as well.
         if (task.getState() != Thread.State.NEW) {
             super.onRestoreInstanceState(savedInstanceState);
         }
@@ -138,8 +111,6 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
 
     @Override protected void onResume() {
         super.onResume();
-        // Needs to be in onResume rather than onStart because onRestoreInstanceState runs
-        // between them.
         if (task.getState() == Thread.State.NEW) {
             task.start();
         }
@@ -147,52 +118,32 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
 
     @Override protected void onPause() {
         super.onPause();
-        saveScroll();  // Necessary to save bottom position in case we've never scrolled.
+        saveScroll();
     }
 
-    // This callback is run after onResume, after each layout pass. If a view's size, position
-    // or visibility has changed, the new values will be visible here.
     @Override public void onGlobalLayout() {
         if (outputWidth != svOutput.getWidth() || outputHeight != svOutput.getHeight()) {
-            // Can't register this listener in onCreate on API level 15
-            // (https://stackoverflow.com/a/35054919).
             if (outputWidth == -1) {
                 svOutput.getViewTreeObserver().addOnScrollChangedListener(this);
             }
-
-            // Either we've just started up, or the keyboard has been hidden or shown.
             outputWidth = svOutput.getWidth();
             outputHeight = svOutput.getHeight();
             restoreScroll();
         } else if (scrollRequest != null) {
             int y = -1;
             switch (scrollRequest) {
-                case TOP:
-                    y = 0;
-                    break;
-                case BOTTOM:
-                    y = tvOutput.getHeight();
-                    break;
+                case TOP: y = 0; break;
+                case BOTTOM: y = tvOutput.getHeight(); break;
             }
-
-            // Don't use smooth scroll, because if an output call happens while it's animating
-            // towards the bottom, isScrolledToBottom will believe we've left the bottom and
-            // auto-scrolling will stop. Don't use fullScroll either, because not only does it use
-            // smooth scroll, it also grabs focus.
             svOutput.scrollTo(0, y);
             scrollRequest = null;
         }
     }
 
-   @Override public void onScrollChanged() {
+    @Override public void onScrollChanged() {
         saveScroll();
     }
 
-    // After a rotation, a ScrollView will restore the previous pixel scroll position. However, due
-    // to re-wrapping, this may result in a completely different piece of text being visible. We'll
-    // try to maintain the text position of the top line, unless the view is scrolled to the bottom,
-    // in which case we'll maintain that. Maintaining the bottom line will also cause a scroll
-    // adjustment when the keyboard's hidden or shown.
     private void saveScroll() {
         if (isScrolledToBottom()) {
             consoleModel.scrollChar = tvOutput.getText().length();
@@ -200,7 +151,7 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         } else {
             int scrollY = svOutput.getScrollY();
             Layout layout = tvOutput.getLayout();
-            if (layout != null) {  // See note in restoreScroll
+            if (layout != null) {
                 int line = layout.getLineForVertical(scrollY);
                 consoleModel.scrollChar = layout.getLineStart(line);
                 consoleModel.scrollAdjust = scrollY - layout.getLineTop(line);
@@ -210,18 +161,11 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
 
     private void restoreScroll() {
         removeCursor();
-
-        // getLayout sometimes returns null even when called from onGlobalLayout. The
-        // documentation says this can happen if the "text or width has recently changed", but
-        // does not define "recently". See Electron Cash issues #1330 and #1592.
         Layout layout = tvOutput.getLayout();
         if (layout != null) {
             int line = layout.getLineForOffset(consoleModel.scrollChar);
             svOutput.scrollTo(0, layout.getLineTop(line) + consoleModel.scrollAdjust);
         }
-
-        // If we are now scrolled to the bottom, we should stick there. (scrollTo probably won't
-        // trigger onScrollChanged unless the scroll actually changed.)
         saveScroll();
 
         task.output.removeObservers(this);
@@ -266,8 +210,38 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         return spanText;
     }
 
+    // ========================================================================
+    //                          UPDATED output() METHOD
+    // ========================================================================
     private void output(CharSequence text) {
         removeCursor();
+
+        String s = text.toString();
+
+        // -------- CLEAR SCREEN --------
+        if (s.contains("\u001b[2J") || s.equals("__CLEAR__")) {
+            tvOutput.setText("");
+            consoleModel.pendingNewline = false;
+            scrollTo(Scroll.TOP);
+            return;
+        }
+
+        // -------- CARRIAGE RETURN (\r) --------
+        if (s.contains("\r")) {
+            Editable buffer = (Editable) tvOutput.getText();
+
+            int lastNewline = buffer.toString().lastIndexOf('\n');
+            if (lastNewline < 0) lastNewline = 0;
+            else lastNewline++;
+
+            buffer.delete(lastNewline, buffer.length());
+            buffer.append(s.replace("\r", ""));
+
+            if (isScrolledToBottom()) scrollTo(Scroll.BOTTOM);
+            return;
+        }
+
+        // Normal processing
         if (consoleModel.pendingNewline) {
             tvOutput.append("\n");
             consoleModel.pendingNewline = false;
@@ -284,47 +258,27 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
             scrollback.delete(0, MAX_SCROLLBACK_LEN / 10);
         }
 
-        // Changes to the TextView height won't be reflected by getHeight until after the
-        // next layout pass, so isScrolledToBottom is safe here.
         if (isScrolledToBottom()) {
             scrollTo(Scroll.BOTTOM);
         }
     }
 
-    // Don't actually scroll until the next onGlobalLayout, when we'll know what the new TextView
-    // height is.
     private void scrollTo(Scroll request) {
-        // The "top" button should take priority over an auto-scroll.
         if (scrollRequest != Scroll.TOP) {
             scrollRequest = request;
             svOutput.requestLayout();
         }
     }
 
-    // Because we've set textIsSelectable, the TextView will create an invisible cursor (i.e. a
-    // zero-length selection) during startup, and re-create it if necessary whenever the user taps
-    // on the view. When a TextView is focused and it has a cursor, it will adjust its containing
-    // ScrollView whenever the text changes in an attempt to keep the cursor on-screen.
-    // textIsSelectable implies focusable, so if there are no other focusable views in the layout,
-    // then it will always be focused.
-    //
-    // To avoid interference from this, we'll remove any cursor before we adjust the scroll.
-    // A non-zero-length selection is left untouched and may affect the scroll in the normal way,
-    // which is fine because it'll only exist if the user deliberately created it.
     private void removeCursor() {
         Spannable text = (Spannable) tvOutput.getText();
         int selStart = Selection.getSelectionStart(text);
         int selEnd = Selection.getSelectionEnd(text);
 
-        // When textIsSelectable is set, the buffer type after onRestoreInstanceState is always
-        // Spannable, regardless of the value of bufferType. It would then become Editable (and
-        // have a cursor added), during the first call to append(). Make that happen now so we can
-        // remove the cursor before append() is called.
         if (!(text instanceof Editable)) {
             tvOutput.setText(text, TextView.BufferType.EDITABLE);
             text = (Editable) tvOutput.getText();
 
-            // setText removes any existing selection, at least on API level 26.
             if (selStart >= 0) {
                 Selection.setSelection(text, selStart, selEnd);
             }
@@ -333,14 +287,13 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         if (selStart >= 0 && selStart == selEnd) {
             Selection.removeSelection(text);
         }
-
     }
 
     public int resId(String type, String name) {
         return Utils.resId(this, type, name);
     }
 
-    // =============================================================================================
+    // ========================================================================
 
     public static abstract class Task extends AndroidViewModel {
 
@@ -369,12 +322,8 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
             inputEnabled.setValue(false);
         }
 
-        /** Override this method to provide the task's implementation. It will be called on a
-         *  background thread. */
         public abstract void run();
 
-        /** Called on the UI thread each time the user enters some input, A trailing newline is
-         * always included. The base class implementation does nothing. */
         public void onInput(String text) {}
 
         public void output(final CharSequence text) {
