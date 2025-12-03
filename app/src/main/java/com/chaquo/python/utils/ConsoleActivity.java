@@ -15,7 +15,7 @@ import androidx.core.content.*;
 import androidx.lifecycle.*;
 
 public abstract class ConsoleActivity extends BaseActivity
-implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollChangedListener {
+        implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollChangedListener {
 
     private final int MAX_SCROLLBACK_LEN = 100000;
 
@@ -67,7 +67,7 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
             @Override
             public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if ((actionId == EditorInfo.IME_ACTION_DONE && event == null) ||
-                    (event != null && event.getAction() == KeyEvent.ACTION_UP)
+                        (event != null && event.getAction() == KeyEvent.ACTION_UP)
                 ) {
                     String text = etInput.getText().toString() + "\n";
                     etInput.setText("");
@@ -178,7 +178,7 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
 
     private boolean isScrolledToBottom() {
         int visibleHeight = (svOutput.getHeight() - svOutput.getPaddingTop() -
-                             svOutput.getPaddingBottom());
+                svOutput.getPaddingBottom());
         int maxScroll = Math.max(0, tvOutput.getHeight() - visibleHeight);
         return (svOutput.getScrollY() >= maxScroll);
     }
@@ -210,57 +210,19 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         return spanText;
     }
 
-    // ========================================================================
-    //                          UPDATED output() METHOD
-    // ========================================================================
+    // =========================================================================
+    //                           SIMPLIFIED output()
+    // =========================================================================
     private void output(CharSequence text) {
         removeCursor();
 
-        String s = text.toString();
+        // Always replace entire tvOutput
+        tvOutput.setText(text);
 
-        // -------- CLEAR SCREEN --------
-        if (s.contains("\u001b[2J") || s.equals("__CLEAR__")) {
-            tvOutput.setText("");
-            consoleModel.pendingNewline = false;
-            scrollTo(Scroll.TOP);
-            return;
-        }
+        // Reset newline logic
+        consoleModel.pendingNewline = false;
 
-        // -------- CARRIAGE RETURN (\r) --------
-        if (s.contains("\r")) {
-            Editable buffer = (Editable) tvOutput.getText();
-
-            int lastNewline = buffer.toString().lastIndexOf('\n');
-            if (lastNewline < 0) lastNewline = 0;
-            else lastNewline++;
-
-            buffer.delete(lastNewline, buffer.length());
-            buffer.append(s.replace("\r", ""));
-
-            if (isScrolledToBottom()) scrollTo(Scroll.BOTTOM);
-            return;
-        }
-
-        // Normal processing
-        if (consoleModel.pendingNewline) {
-            tvOutput.append("\n");
-            consoleModel.pendingNewline = false;
-        }
-        if (text.charAt(text.length() - 1) == '\n') {
-            tvOutput.append(text.subSequence(0, text.length() - 1));
-            consoleModel.pendingNewline = true;
-        } else {
-            tvOutput.append(text);
-        }
-
-        Editable scrollback = (Editable) tvOutput.getText();
-        if (scrollback.length() > MAX_SCROLLBACK_LEN) {
-            scrollback.delete(0, MAX_SCROLLBACK_LEN / 10);
-        }
-
-        if (isScrolledToBottom()) {
-            scrollTo(Scroll.BOTTOM);
-        }
+        scrollTo(Scroll.BOTTOM);
     }
 
     private void scrollTo(Scroll request) {
@@ -293,7 +255,7 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
         return Utils.resId(this, type, name);
     }
 
-    // ========================================================================
+    // =========================================================================
 
     public static abstract class Task extends AndroidViewModel {
 
@@ -344,5 +306,4 @@ implements ViewTreeObserver.OnGlobalLayoutListener, ViewTreeObserver.OnScrollCha
             return Utils.resId(getApplication(), type, name);
         }
     }
-
 }
